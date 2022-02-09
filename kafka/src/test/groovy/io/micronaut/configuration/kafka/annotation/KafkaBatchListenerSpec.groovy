@@ -7,13 +7,12 @@ import io.micronaut.context.annotation.Requires
 import io.micronaut.messaging.annotation.MessageHeader
 import io.micronaut.messaging.annotation.SendTo
 import io.reactivex.Flowable
+import org.apache.kafka.clients.consumer.ConsumerRecord
 import reactor.core.publisher.Flux
-import spock.lang.Retry
 
 import static io.micronaut.configuration.kafka.annotation.OffsetReset.EARLIEST
 import static io.micronaut.configuration.kafka.config.AbstractKafkaConfiguration.EMBEDDED_TOPICS
 
-@Retry
 class KafkaBatchListenerSpec extends AbstractKafkaContainerSpec {
 
     public static final String BOOKS_TOPIC = 'KafkaBatchListenerSpec-books'
@@ -27,6 +26,8 @@ class KafkaBatchListenerSpec extends AbstractKafkaContainerSpec {
     public static final String BOOKS_FORWARD_FLOWABLE_TOPIC = 'KafkaBatchListenerSpec-books-forward-flowable'
     public static final String BOOKS_ARRAY_TOPIC = 'KafkaBatchListenerSpec-books-array'
     public static final String TITLES_TOPIC = 'KafkaBatchListenerSpec-titles'
+    public static final String BOOKS_LIST_WITH_KEYS_TOPIC = 'KafkaBatchListenerSpec-books-list-with-keys'
+    public static final String BOOKS_LIST_CONSUMER_RECORDS_TOPIC = 'KafkaBatchListenerSpec-books-list-consumer-records-topic'
 
     protected Map<String, Object> getConfiguration() {
         super.configuration +
@@ -36,6 +37,84 @@ class KafkaBatchListenerSpec extends AbstractKafkaContainerSpec {
                                      BOOKS_TOPIC,
                                      BOOKS_FORWARD_LIST_TOPIC]
                 ]
+    }
+
+    void "test receive list consumer records"() {
+        given:
+        MyBatchClient myBatchClient = context.getBean(MyBatchClient)
+        BookListener bookListener = context.getBean(BookListener)
+        bookListener.books?.clear()
+        bookListener.keys?.clear()
+
+        when:
+        myBatchClient.sendBooksToListConsumerRecord([new Book(title: "The Header"), new Book(title: "The Shining")])
+
+        then: 'expected'
+        conditions.eventually {
+            bookListener.books.size() == 2
+            bookListener.books.contains(new Book(title: "The Header"))
+            bookListener.books.contains(new Book(title: "The Shining"))
+        }
+
+        and: 'fails with'
+        def t = """16:02:53.194 [pool-1-thread-2] ERROR i.m.c.k.e.KafkaListenerExceptionHandler - Kafka consumer [io.micronaut.configuration.kafka.annotation.KafkaBatchListenerSpec$BookListener@245779dd] failed to deserialize value: Error deserializing key/value for partition KafkaBatchListenerSpec-books-list-consumer-records-topic-0 at offset 0. If needed, please seek past the record to continue consumption.
+org.apache.kafka.common.errors.SerializationException: Error deserializing key/value for partition KafkaBatchListenerSpec-books-list-consumer-records-topic-0 at offset 0. If needed, please seek past the record to continue consumption.
+Caused by: io.micronaut.core.serialize.exceptions.SerializationException: Error deserializing object from JSON: Cannot construct instance of `org.apache.kafka.clients.consumer.ConsumerRecord` (no Creators, like default constructor, exist): cannot deserialize from Object value (no delegate- or property-based Creator)
+ at [Source: (byte[])"{"title":"The Header"}"; line: 1, column: 2]
+\tat io.micronaut.json.JsonObjectSerializer.deserialize(JsonObjectSerializer.java:70)
+\tat io.micronaut.configuration.kafka.serde.JsonObjectSerde.deserialize(JsonObjectSerde.java:59)
+\tat org.apache.kafka.common.serialization.Deserializer.deserialize(Deserializer.java:60)
+\tat org.apache.kafka.clients.consumer.internals.Fetcher.parseRecord(Fetcher.java:1386)
+\tat org.apache.kafka.clients.consumer.internals.Fetcher.access\$3400(Fetcher.java:133)
+\tat org.apache.kafka.clients.consumer.internals.Fetcher$CompletedFetch.fetchRecords(Fetcher.java:1617)
+\tat org.apache.kafka.clients.consumer.internals.Fetcher$CompletedFetch.access\$1700(Fetcher.java:1453)
+\tat org.apache.kafka.clients.consumer.internals.Fetcher.fetchRecords(Fetcher.java:686)
+\tat org.apache.kafka.clients.consumer.internals.Fetcher.fetchedRecords(Fetcher.java:637)
+\tat org.apache.kafka.clients.consumer.KafkaConsumer.pollForFetches(KafkaConsumer.java:1303)
+\tat org.apache.kafka.clients.consumer.KafkaConsumer.poll(KafkaConsumer.java:1237)
+\tat org.apache.kafka.clients.consumer.KafkaConsumer.poll(KafkaConsumer.java:1210)
+\tat io.opentracing.contrib.kafka.TracingKafkaConsumer.poll(TracingKafkaConsumer.java:132)
+\tat io.micronaut.configuration.kafka.processor.KafkaConsumerProcessor.createConsumerThreadPollLoop(KafkaConsumerProcessor.java:453)
+\tat io.micronaut.configuration.kafka.processor.KafkaConsumerProcessor.lambda$submitConsumerThread\$7(KafkaConsumerProcessor.java:421)
+\tat io.micronaut.scheduling.instrument.InvocationInstrumenterWrappedRunnable.run(InvocationInstrumenterWrappedRunnable.java:47)
+\tat io.micrometer.core.instrument.composite.CompositeTimer.record(CompositeTimer.java:79)
+\tat io.micrometer.core.instrument.Timer.lambda$wrap\$0(Timer.java:160)
+\tat java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:515)
+\tat java.base/java.util.concurrent.FutureTask.run(FutureTask.java:264)
+\tat java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1128)
+\tat java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:628)
+\tat java.base/java.lang.Thread.run(Thread.java:834)"""
+    }
+
+    void "test receive list of messages and keys"() {
+        given:
+        MyBatchClient myBatchClient = context.getBean(MyBatchClient)
+        BookListener bookListener = context.getBean(BookListener)
+        bookListener.books?.clear()
+        bookListener.keys?.clear()
+
+        when:
+        myBatchClient.sendBooksWithKeys(["key1", "key2"], [new Book(title: "The Header"), new Book(title: "The Shining")])
+
+        then: 'expected'
+        conditions.eventually {
+            bookListener.books.size() == 2
+            bookListener.books.contains(new Book(title: "The Header"))
+            bookListener.books.contains(new Book(title: "The Shining"))
+            bookListener.keys.size() == 2
+            bookListener.keys.contains("key1")
+            bookListener.keys.contains("key2")
+        }
+
+        and: 'fails with'
+        def t = """
+Caused by: Condition not satisfied:
+
+  bookListener.keys.contains("key1")
+  |            |    |
+  |            |    false
+  |            [key1,key2, key1,key2]
+"""
     }
 
     void "test send batch list with headers - blocking"() {
@@ -211,6 +290,12 @@ class KafkaBatchListenerSpec extends AbstractKafkaContainerSpec {
         @Topic(KafkaBatchListenerSpec.BOOKS_LIST_TOPIC)
         void sendBooks(List<Book> books)
 
+        @Topic(KafkaBatchListenerSpec.BOOKS_LIST_WITH_KEYS_TOPIC)
+        void sendBooksWithKeys(@KafkaKey List<String> keys, List<Book> books)
+
+        @Topic(KafkaBatchListenerSpec.BOOKS_LIST_CONSUMER_RECORDS_TOPIC)
+        void sendBooksToListConsumerRecord(List<Book> books)
+
         @Topic(KafkaBatchListenerSpec.BOOKS_HEADERS_TOPIC)
         @MessageHeader(name = "X-Foo", value = "Bar")
         void sendBooksAndHeaders(List<Book> books)
@@ -243,10 +328,22 @@ class KafkaBatchListenerSpec extends AbstractKafkaContainerSpec {
     static class BookListener {
         List<Book> books = []
         List<String> headers = []
+        List<String> keys = []
 
         @Topic(KafkaBatchListenerSpec.BOOKS_LIST_TOPIC)
         void receiveList(List<Book> books) {
             this.books.addAll books
+        }
+
+        @Topic(KafkaBatchListenerSpec.BOOKS_LIST_CONSUMER_RECORDS_TOPIC)
+        void receiveConsumerRecordList(List<ConsumerRecord<String, Book>> bookRecords) {
+            this.books.addAll bookRecords.collect { it.value()}
+        }
+
+        @Topic(KafkaBatchListenerSpec.BOOKS_LIST_WITH_KEYS_TOPIC)
+        void receiveListWithKeys(@KafkaKey List<String> keys, List<Book> books) {
+            this.books.addAll books
+            this.keys.addAll keys
         }
 
         @Topic(KafkaBatchListenerSpec.BOOKS_HEADERS_TOPIC)
